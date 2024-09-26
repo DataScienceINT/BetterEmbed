@@ -46,13 +46,8 @@ class ContrastiveQADataset(Dataset):
 
     def __getitem__(self, idx):
         question = self.questions[idx]
-        positive_answer = self.answers[idx]
-        
-        # Ensure that the positive answer is excluded from negative sampling
-        negative_candidates = [ans for ans in self.answers if ans != positive_answer]
-        
-        # Generate negative samples from the candidates
-        negative_answers = random.sample(negative_candidates, self.negative_samples)
+        positive_answer = self.positive_answers[idx]
+        negative_answers = self.negative_answers[idx]
         
         return question, positive_answer, negative_answers
 
@@ -87,9 +82,10 @@ class ContrastiveAutoencoder(PreTrainedModel):
         :param texts: List of text strings.
         :return: Encoded embeddings.
         """
-        with torch.no_grad():
-            text_embeddings = self.embedding_model.encode(texts, convert_to_tensor=True)
-            return self.encoder(text_embeddings)
+        # Generate text embeddings using the SentenceTransformer
+        text_embeddings = self.embedding_model.encode(texts, convert_to_tensor=True)  
+        text_embeddings = text_embeddings.to(self.device)
+        return self.encoder(text_embeddings)
 
 
 class TripletLoss(nn.Module):
@@ -180,12 +176,15 @@ def main():
 
     # Prepare the dataset for contrastive training
     contrastive_dataset = ContrastiveQADataset(dataset, negative_samples=1)
+    
+    # Load the embedding model
+    embedding_model = SentenceTransformer(args.embedding_model)
 
     #  Initialize the contrastive autoencoder configuration
     config = ContrastiveAutoencoderConfig(input_dim=args.input_dim, embedding_dim=args.embedding_dim)
 
     # Initialize the contrastive autoencoder model
-    model = ContrastiveAutoencoder(config=config,embedding_model=args.embedding_model)
+    model = ContrastiveAutoencoder(config=config,embedding_model=embedding_model)
 
     # Train the model
     trained_model = train_contrastive_model(
