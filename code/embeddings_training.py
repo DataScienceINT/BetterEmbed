@@ -9,6 +9,7 @@ import argparse
 import json
 from tqdm import tqdm
 import time
+import os
 
 ##### DATASET PREP #####
 class ContrastiveQADataset(Dataset):
@@ -56,7 +57,7 @@ class ContrastiveQADataset(Dataset):
 
 class ContrastiveAutoencoderConfig(PretrainedConfig):
     # This is to make our model compatible with HF
-    def __init__(self, input_dim=768, embedding_dim=64, **kwargs):  # Update input_dim to match your embedding model's output size
+    def __init__(self, input_dim=768, embedding_dim=64, **kwargs):  # input_dim to match your embedding model's output size
         super().__init__(**kwargs)
         self.input_dim = input_dim
         self.embedding_dim = embedding_dim
@@ -64,7 +65,7 @@ class ContrastiveAutoencoderConfig(PretrainedConfig):
 class ContrastiveAutoencoder(PreTrainedModel):
     config_class = ContrastiveAutoencoderConfig
 
-    def __init__(self, config, embedding_model):
+    def __init__(self, config, embedding_model=None):
         super().__init__(config)
         self.encoder = nn.Sequential(
             nn.Linear(config.input_dim, 128),  
@@ -84,8 +85,26 @@ class ContrastiveAutoencoder(PreTrainedModel):
         """
         # Generate text embeddings using the SentenceTransformer
         text_embeddings = self.embedding_model.encode(texts, convert_to_tensor=True)  
-        text_embeddings = text_embeddings.to(self.device)
+        text_embeddings = text_embeddings.to(next(self.parameters()).device)
         return self.encoder(text_embeddings)
+
+    @classmethod
+    def from_pretrained(cls, model_path, *model_args, **kwargs):
+        """
+        Load the ContrastiveAutoencoder along with the embedding model.
+        """
+        # Load the base ContrastiveAutoencoder model
+        model = super().from_pretrained(model_path, *model_args, **kwargs)
+
+        # Now manually load the SentenceTransformer embedding model from the 'embedding_model' subdirectory
+        embedding_model_path = os.path.join(model_path, 'embedding_model')
+        if os.path.exists(embedding_model_path):
+            embedding_model = SentenceTransformer(embedding_model_path)
+            model.embedding_model = embedding_model
+        else:
+            raise ValueError(f"Embedding model not found at {embedding_model_path}")
+
+        return model
 
 
 class TripletLoss(nn.Module):
@@ -148,9 +167,21 @@ def train_contrastive_model(model, dataset, batch_size=32, epochs=10):
 
 ##### SAVE MODEL (HF FORMAT) #####
 
-def save_model_huggingface(model, tokenizer, save_directory):
-    model.save_pretrained(save_directory)  # Save model weights and config
-    tokenizer.save_pretrained(save_directory)  # Save tokenizer
+def save_model_huggingface(model, save_directory):
+    # Ensure the directory exists
+    os.makedirs(save_directory, exist_ok=True)
+
+    # Save the ContrastiveAutoencoder model
+    model.save_pretrained(save_directory)
+
+    # Save the SentenceTransformer embedding model
+    if model.embedding_model is not None:
+        model.embedding_model.save(os.path.join(save_directory, 'embedding_model'))
+
+        # Check if the embedding model has a tokenizer and save it if it does
+        if hasattr(model.embedding_model, 'tokenizer'):
+            model.embedding_model.tokenizer.save_pretrained(os.path.join(save_directory, 'embedding_model'))
+
 
 
 ##### PERFORM TRAINING #####
@@ -184,7 +215,9 @@ def main():
     config = ContrastiveAutoencoderConfig(input_dim=args.input_dim, embedding_dim=args.embedding_dim)
 
     # Initialize the contrastive autoencoder model
-    model = ContrastiveAutoencoder(config=config,embedding_model=embedding_model)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = ContrastiveAutoencoder(config=config, embedding_model=embedding_model)
+    model.to(device)
 
     # Train the model
     trained_model = train_contrastive_model(
@@ -195,8 +228,8 @@ def main():
     )
 
     # Save the trained model (HuggingFace format)
-    tokenizer = embedding_model.tokenizer  # Get the tokenizer from the user-provided embedding model
-    save_model_huggingface(trained_model, tokenizer, args.save_model)
+    # tokenizer = embedding_model.tokenizer  # Get the tokenizer from the user-provided embedding model
+    save_model_huggingface(trained_model, args.save_model)
     print(f"Model saved to {args.save_model}")
 
 if __name__ == "__main__":
