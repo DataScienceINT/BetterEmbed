@@ -172,6 +172,11 @@ class TripletLoss(nn.Module):
         self.margin = margin
 
     def forward(self, anchor, positive, negative):
+        # Normalize embeddings to unit vectors
+        anchor = nn.functional.normalize(anchor, p=2, dim=-1)
+        positive = nn.functional.normalize(positive, p=2, dim=-1)
+        negative = nn.functional.normalize(negative, p=2, dim=-1)
+        
         # Positive similarity (between question and correct answer)
         pos_similarity = torch.nn.functional.cosine_similarity(anchor, positive, dim=-1)
         # Negative similarity (between question and incorrect answer)
@@ -189,8 +194,8 @@ def train_contrastive_model(model, dataset, batch_size=32, epochs=10, faiss_batc
 
     model.to(device)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    criterion = TripletLoss(margin=1.0).to(device)
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    criterion = TripletLoss(margin=0.2).to(device)
+    optimizer = optim.Adam(model.parameters(), lr=1e-4)
 
     all_answers = list(set(answer for _, answer in dataset.data))
     faiss_index, all_answer_embeddings = build_faiss_index(model, all_answers, use_gpu=torch.cuda.is_available())
