@@ -213,6 +213,29 @@ def evaluate_model(model, val_loader, criterion, device, faiss_index, all_answer
             val_loss += loss.item()
     return val_loss / len(val_loader)
 
+def evaluate_model(model, val_loader, criterion, device, faiss_index, all_answers, faiss_batch_size):
+    """
+    Evaluates the model on the validation set, using hard negatives sampled on-the-fly from FAISS.
+    """
+    model.eval()
+    val_loss = 0.0
+    with torch.no_grad():
+        for questions, pos_answers in val_loader:
+            questions, pos_answers = list(questions), list(pos_answers)
+            
+            # Encode questions and positive answers using the model
+            anchor = model.encode(questions).to(device)
+            positive = model.encode(pos_answers).to(device)
+            
+            # Find hard negatives using FAISS (find closest negatives dynamically)
+            hard_negatives = find_hard_negatives(faiss_index, model, questions, pos_answers, all_answers, batch_size=faiss_batch_size)
+            negative = model.encode(hard_negatives).to(device)
+            
+            # Calculate the triplet loss
+            loss = criterion(anchor, positive, negative)
+            val_loss += loss.item()
+    
+    return val_loss / len(val_loader)
 
 def train_contrastive_model(model, train_loader, val_loader, optimizer, criterion, scheduler, device, faiss_index, all_answers, faiss_batch_size, patience=5, epochs=10, log_file=None):
     """
@@ -224,7 +247,7 @@ def train_contrastive_model(model, train_loader, val_loader, optimizer, criterio
     patience_counter = 0
     train_losses, val_losses = [], []
     
-    for epoch in range(1, epochs + 10):
+    for epoch in range(1, epochs + 1):
         model.train()
         total_loss = 0.0
         
